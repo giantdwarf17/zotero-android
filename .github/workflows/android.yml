@@ -56,6 +56,9 @@ jobs:
 
       - name: Download Android dependencies
         run: ./gradlew androidDependencies --no-configuration-cache
-
+        
+      - name: Build the app
+        run: ./gradlew build
+        
       - name: Deploy to Google Play Internal Test Track
         run: ./gradlew --no-configuration-cache -PpreDexLibs=false publishInternalReleaseBundle --stacktrace
