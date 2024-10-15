@@ -1,4 +1,3 @@
-import com.github.triplet.gradle.androidpublisher.ResolutionStrategy
 import java.io.ByteArrayOutputStream
 
 plugins {
@@ -6,11 +5,10 @@ plugins {
     kotlin("android")
     kotlin("kapt")
     kotlin("plugin.serialization")
-    id("com.github.triplet.play") version "3.7.0"
     id("dagger.hilt.android.plugin")
     id("realm-android")
     id("kotlin-parcelize")
-    id("com.google.gms.google-services")
+//   id("com.google.gms.google-services")
     id("com.google.firebase.crashlytics")
 
     //----Dependency plugins start----
@@ -128,12 +126,6 @@ android {
 //            }
 //        }
     }
-}
-
-play {
-    track.set("internal")
-    defaultToAppBundles.set(true)
-    resolutionStrategy.set(ResolutionStrategy.AUTO)
 }
 
 dependencies {

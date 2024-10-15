@@ -1,13 +1,6 @@
 name: Zotero Android CI
 
-on:
-  push:
-    # Pattern matched against refs/tags
-    tags:
-      - '**'  # Push events to every tag including hierarchical tags like v1.0/beta
-
-env:
-  ANDROID_PUBLISHER_CREDENTIALS: ${{secrets.ANDROID_PUBLISHER_CREDENTIALS}}
+on: workflow_dispatch
 
 jobs:
   build:
@@ -18,26 +11,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: set up JDK
+
+      - name: Set up JDK
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'zulu'
           cache: gradle
 
-      - name: set up Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Writing PSPDFKIT's key into a file to be then picked up by gradle.
-        run: echo ${{secrets.PSPDFKIT_KEY}} | sed 's/./& /g' > pspdfkit-key.txt
-
-      - name: Decrypt Keystore
-        run: openssl aes-256-cbc -d -in .github/keystore.cipher -k ${{secrets.SIGNING_KEY}} -md sha256 > zotero.release.keystore
-
-      - name: Decrypt Keystore secrets
-        run: openssl aes-256-cbc -d -in .github/keystore-secrets.cipher -k ${{secrets.SIGNING_KEY}} -md sha256 > keystore-secrets.txt
+      - name: Writing PSPDFKIT's key into a file
+        run: echo ${{ secrets.PSPDFKIT_KEY }} | sed 's/./& /g' > pspdfkit-key.txt
 
       - name: Grant execute permission for bundle_translators.py
         run: chmod +x scripts/bundle_translators.py
@@ -54,8 +42,13 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Download Android dependencies
-        run: ./gradlew androidDependencies --no-configuration-cache
+      # Skip downloading dependencies from remote repositories to avoid authentication
+      - name: Build the app without remote credentials
+        run: ./gradlew assembleDebug --no-configuration-cache -PpreDexLibs=false --stacktrace
 
-      - name: Deploy to Google Play Internal Test Track
-        run: ./gradlew --no-configuration-cache -PpreDexLibs=false publishInternalReleaseBundle --stacktrace
+      # Upload the generated APK if it exists
+      - name: Upload APK Release - ${{ env.repository_name }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.date_today }} - ${{ env.repository_name }} - APK(s) release generated
+          path: app/build/outputs/apk/debug/app-debug.apk
