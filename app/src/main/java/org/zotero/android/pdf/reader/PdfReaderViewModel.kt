@@ -36,6 +36,7 @@ import com.pspdfkit.annotations.configuration.MarkupAnnotationConfiguration
 import com.pspdfkit.annotations.configuration.NoteAnnotationConfiguration
 import com.pspdfkit.annotations.configuration.ShapeAnnotationConfiguration
 import com.pspdfkit.configuration.activity.PdfActivityConfiguration
+import com.pspdfkit.configuration.activity.UserInterfaceViewMode
 import com.pspdfkit.configuration.page.PageFitMode
 import com.pspdfkit.configuration.page.PageScrollMode
 import com.pspdfkit.configuration.theming.ThemeMode
@@ -43,6 +44,8 @@ import com.pspdfkit.document.OutlineElement
 import com.pspdfkit.document.PdfDocument
 import com.pspdfkit.document.PdfDocumentLoader
 import com.pspdfkit.listeners.DocumentListener
+import com.pspdfkit.listeners.scrolling.DocumentScrollListener
+import com.pspdfkit.listeners.scrolling.ScrollState
 import com.pspdfkit.preferences.PSPDFKitPreferences
 import com.pspdfkit.ui.PdfFragment
 import com.pspdfkit.ui.PdfUiFragment
@@ -52,6 +55,7 @@ import com.pspdfkit.ui.special_mode.controller.AnnotationCreationController
 import com.pspdfkit.ui.special_mode.controller.AnnotationSelectionController
 import com.pspdfkit.ui.special_mode.controller.AnnotationTool
 import com.pspdfkit.ui.special_mode.manager.AnnotationManager
+import com.pspdfkit.ui.toolbar.popup.PopupToolbarMenuItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.realm.OrderedCollectionChangeSet
 import io.realm.RealmResults
@@ -112,6 +116,7 @@ import org.zotero.android.pdf.annotation.data.PdfAnnotationArgs
 import org.zotero.android.pdf.annotation.data.PdfAnnotationColorResult
 import org.zotero.android.pdf.annotation.data.PdfAnnotationCommentResult
 import org.zotero.android.pdf.annotation.data.PdfAnnotationDeleteResult
+import org.zotero.android.pdf.annotation.data.PdfAnnotationFontSizeResult
 import org.zotero.android.pdf.annotation.data.PdfAnnotationSizeResult
 import org.zotero.android.pdf.annotationmore.data.PdfAnnotationMoreArgs
 import org.zotero.android.pdf.annotationmore.data.PdfAnnotationMoreDeleteResult
@@ -138,6 +143,7 @@ import org.zotero.android.pdf.data.PdfReaderThemeDecider
 import org.zotero.android.pdf.pdffilter.data.PdfFilterArgs
 import org.zotero.android.pdf.pdffilter.data.PdfFilterResult
 import org.zotero.android.pdf.reader.AnnotationKey.Kind
+import org.zotero.android.pdf.reader.pdfsearch.data.OnPdfReaderSearch
 import org.zotero.android.pdf.reader.pdfsearch.data.PdfReaderSearchArgs
 import org.zotero.android.pdf.reader.pdfsearch.data.PdfReaderSearchResultSelected
 import org.zotero.android.pdf.reader.plainreader.data.PdfPlainReaderArgs
@@ -164,11 +170,13 @@ import org.zotero.android.sync.LibraryIdentifier
 import org.zotero.android.sync.SchemaController
 import org.zotero.android.sync.SessionDataEventStream
 import org.zotero.android.sync.Tag
+import org.zotero.android.uicomponents.Strings
 import timber.log.Timber
 import java.util.EnumSet
+import java.util.Timer
 import javax.inject.Inject
+import kotlin.concurrent.timerTask
 import kotlin.random.Random
-
 
 @HiltViewModel
 class PdfReaderViewModel @Inject constructor(
@@ -227,18 +235,18 @@ class PdfReaderViewModel @Inject constructor(
 
     private lateinit var searchResultHighlighter: SearchResultHighlighter
 
+    private var disableForceScreenOnTimer: Timer? = null
+
+    private var annotationEditSelectedKey: String? = null
+    private var isLongPressOnTextAnnotation = false
+
     val screenArgs: PdfReaderArgs by lazy {
         val argsEncoded = stateHandle.get<String>(ARG_PDF_SCREEN).require()
         navigationParamsMarshaller.decodeObjectFromBase64(argsEncoded)
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
-    fun onUserInterfaceVisibilityChanged(event: OnUserInterfaceVisibilityChangedEvent) {
-        toggleTopAndBottomBarVisibility(event.isVisible)
-    }
-
-    @Subscribe(threadMode = ThreadMode.MAIN)
-    fun onPdfPageScrolled(event: OnPdfPageScrolled) {
+    fun onPageChangedEvent(event: OnPageChangedEvent) {
         triggerEffect(PdfReaderViewEffect.ScrollThumbnailListToIndex(event.pageIndex))
         val row = viewState.thumbnailRows.firstOrNull { it.pageIndex == event.pageIndex }
         updateState {
@@ -262,8 +270,8 @@ class PdfReaderViewModel @Inject constructor(
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onEvent(tagPickerResult: TagPickerResult) {
         if (tagPickerResult.callPoint == TagPickerResult.CallPoint.PdfReaderScreen) {
-            val annotation = this@PdfReaderViewModel.selectedAnnotation ?: return
-            set(tags = tagPickerResult.tags, key = annotation.key)
+            val key = this.annotationEditSelectedKey ?: return
+            set(tags = tagPickerResult.tags, key = key)
         }
     }
 
@@ -282,6 +290,11 @@ class PdfReaderViewModel @Inject constructor(
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onEvent(result: PdfAnnotationSizeResult) {
         setLineWidth(key = result.key, width = result.size)
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onEvent(result: PdfAnnotationFontSizeResult) {
+        setF(key = result.key, fontSize = result.size)
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
@@ -340,9 +353,14 @@ class PdfReaderViewModel @Inject constructor(
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onEvent(result: PdfReaderSearchResultSelected) {
-        searchResultHighlighter.setSearchResults(listOf(result.searchResult))
+//        searchResultHighlighter.setSearchResults(listOf(result.searchResult))
         searchResultHighlighter.setSelectedSearchResult(result.searchResult)
         this.pdfUiFragment.pageIndex = result.searchResult.pageIndex
+    }
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onEvent(result: OnPdfReaderSearch) {
+        searchResultHighlighter.setSearchResults(result.searchResult)
     }
 
     private fun update(pdfSettings: PDFSettings) {
@@ -370,19 +388,13 @@ class PdfReaderViewModel @Inject constructor(
     }
 
     class CustomPdfUiFragment: PdfUiFragment() {
-        override fun onUserInterfaceVisibilityChanged(visible: Boolean) {
-            super.onUserInterfaceVisibilityChanged(visible)
-            EventBus.getDefault().post(OnUserInterfaceVisibilityChangedEvent(visible))
-        }
-
         override fun onPageChanged(document: PdfDocument, pageIndex: Int) {
             super.onPageChanged(document, pageIndex)
-            EventBus.getDefault().post(OnPdfPageScrolled(pageIndex))
+            EventBus.getDefault().post(OnPageChangedEvent(pageIndex))
         }
     }
 
-    data class OnUserInterfaceVisibilityChangedEvent(val isVisible: Boolean)
-    data class OnPdfPageScrolled(val pageIndex: Int)
+    data class OnPageChangedEvent(val pageIndex: Int)
 
     override fun init(
         uri: Uri,
@@ -391,6 +403,7 @@ class PdfReaderViewModel @Inject constructor(
         fragmentManager: FragmentManager,
         isTablet: Boolean,
     ) {
+        restartDisableForceScreenOnTimer()
         this.uri = uri
         this.isTablet = isTablet
         this.fragmentManager = fragmentManager
@@ -430,6 +443,7 @@ class PdfReaderViewModel @Inject constructor(
                 addDocumentListenerOnInit()
                 addOnAnnotationCreationModeChangeListener()
                 setOnPreparePopupToolbarListener()
+                addDocumentScrollListener()
             }
 
             override fun onDestroy(owner: LifecycleOwner) {
@@ -440,6 +454,25 @@ class PdfReaderViewModel @Inject constructor(
         fragmentManager.commit {
             add(containerId, this@PdfReaderViewModel.pdfUiFragment)
         }
+    }
+
+    private fun addDocumentScrollListener() {
+        pdfFragment.addDocumentScrollListener(object : DocumentScrollListener {
+            override fun onScrollStateChanged(state: ScrollState) {
+                if (state == ScrollState.DRAGGED) {
+                    setBottomBarVisibility(false)
+                }
+            }
+
+            override fun onDocumentScrolled(p0: Int, p1: Int, p2: Int, p3: Int, p4: Int, p5: Int) {
+                //no-op
+            }
+        })
+
+    }
+
+    private fun setBottomBarVisibility(isVisible: Boolean) {
+        pdfUiFragment.setUserInterfaceVisible(isVisible, true)
     }
 
     private fun addDocumentListenerOnInit() {
@@ -456,32 +489,75 @@ class PdfReaderViewModel @Inject constructor(
                 pagePosition: PointF?,
                 clickedAnnotation: Annotation?
             ): Boolean {
+                decideTopBarAndBottomBarVisibility(clickedAnnotation)
                 return false
             }
         })
     }
 
+    private var lastSelectedAnnotation: Annotation? = null
+
+    private fun decideTopBarAndBottomBarVisibility(currentlySelectedAnnotation: Annotation?) {
+        val wasAnnotationClicked = currentlySelectedAnnotation != null
+        if (currentlySelectedAnnotation == null &&
+            (lastSelectedAnnotation?.type == AnnotationType.FREETEXT || lastSelectedAnnotation?.type == AnnotationType.NOTE)) {
+            lastSelectedAnnotation = null
+            return
+        }
+        lastSelectedAnnotation = currentlySelectedAnnotation
+        if (wasAnnotationClicked) {
+            return
+        }
+        val isBottomBarCurrentlyVisible = pdfUiFragment.isUserInterfaceVisible
+        val isTopBarCurrentlyVisible = viewState.isTopBarVisible
+
+        if (isTopBarCurrentlyVisible && isBottomBarCurrentlyVisible) {
+            setTopBarVisibility(false)
+            setBottomBarVisibility(false)
+            return
+        }
+        if (!isTopBarCurrentlyVisible && !isBottomBarCurrentlyVisible) {
+            setTopBarVisibility(true)
+            setBottomBarVisibility(true)
+            return
+        }
+
+        if (isBottomBarCurrentlyVisible && !isTopBarCurrentlyVisible) {
+            setTopBarVisibility(true)
+            return
+        }
+        if (!isBottomBarCurrentlyVisible && isTopBarCurrentlyVisible) {
+            setBottomBarVisibility(true)
+            return
+        }
+
+    }
+
     private fun setOnPreparePopupToolbarListener() {
         this.pdfFragment.setOnPreparePopupToolbarListener { toolbar ->
-            val sourceItems = toolbar.menuItems
+            val sourceItems = toolbar.menuItems.toMutableList()
             val menuItems = sourceItems.listIterator()
 
             while (menuItems.hasNext()) {
                 val item = menuItems.next()
                 when (item.id) {
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_underline,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_strikeout,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_speak,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_search,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_redact,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_paste_annotation,
-                    com.pspdfkit.R.id.pspdf__text_selection_toolbar_item_link,
+                    R.id.pspdf__text_selection_toolbar_item_strikeout,
+                    R.id.pspdf__text_selection_toolbar_item_speak,
+                    R.id.pspdf__text_selection_toolbar_item_search,
+                    R.id.pspdf__text_selection_toolbar_item_redact,
+                    R.id.pspdf__text_selection_toolbar_item_paste_annotation,
+                    R.id.pspdf__text_selection_toolbar_item_link,
                     -> {
                         menuItems.remove()
                     }
                 }
             }
-
+            val textHighlightItemIndex =
+                sourceItems.indexOfFirst { it.id == R.id.pspdf__text_selection_toolbar_item_highlight }
+            sourceItems[textHighlightItemIndex] = PopupToolbarMenuItem(
+                R.id.pspdf__text_selection_toolbar_item_highlight,
+                Strings.pdf_highlight
+            )
             toolbar.menuItems = sourceItems
         }
     }
@@ -598,6 +674,14 @@ class PdfReaderViewModel @Inject constructor(
     }
 
     private fun setupInteractionListeners() {
+        pdfFragment.setOnDocumentLongPressListener { _, _, _, _, annotation ->
+            if (annotation?.type == AnnotationType.FREETEXT) {
+                isLongPressOnTextAnnotation = true
+                pdfFragment.setSelectedAnnotation(annotation)
+                return@setOnDocumentLongPressListener true
+            }
+            false
+        }
         pdfFragment.addOnAnnotationSelectedListener(object :
             AnnotationManager.OnAnnotationSelectedListener {
             override fun onPrepareAnnotationSelection(
@@ -613,7 +697,9 @@ class PdfReaderViewModel @Inject constructor(
                 val key = annotation.key ?: annotation.uuid
                 val type: Kind =
                     if (annotation.isZoteroAnnotation) Kind.database else Kind.document
-                selectAnnotationFromDocument(AnnotationKey(key = key, type = type))
+                selectAnnotationFromDocument(
+                    key = AnnotationKey(key = key, type = type),
+                )
             }
 
         })
@@ -831,7 +917,12 @@ class PdfReaderViewModel @Inject constructor(
             }
 
             override fun onAnnotationUpdated(annotation: Annotation) {
-                processAnnotationObserving(annotation, emptyList(), PdfReaderNotification.PSPDFAnnotationChanged)
+                processAnnotationObserving(
+                    annotation = annotation,
+                    changes = emptyList(),
+                    pdfReaderNotification = PdfReaderNotification.PSPDFAnnotationChanged
+                )
+                lastSelectedAnnotation = annotation
             }
 
             override fun onAnnotationRemoved(annotation: Annotation) {
@@ -997,17 +1088,10 @@ class PdfReaderViewModel @Inject constructor(
             requests.add(request)
         }
 
-        if(requests.isEmpty()) { return }
-
-        viewModelScope.launch {
-            perform(
-                dbWrapper = dbWrapperMain,
-                writeRequests = requests
-            ).ifFailure {
-                Timber.e(it, "PDFReaderViewModel:  can't update changed annotations")
-                return@launch
-            }
+        if (requests.isEmpty()) {
+            return
         }
+        dbWrapperMain.realmDbStorage.perform(requests)
 
         pdfFragment.notifyAnnotationHasChanged(annotation)
         //TODO
@@ -1016,7 +1100,8 @@ class PdfReaderViewModel @Inject constructor(
     private fun processAnnotationObserving(
         annotation: Annotation,
         changes: List<String>,
-        pdfReaderNotification: PdfReaderNotification
+        pdfReaderNotification: PdfReaderNotification,
+        ignoreDebouncer: Boolean = false,
     ) {
 
         when (pdfReaderNotification) {
@@ -1038,13 +1123,18 @@ class PdfReaderViewModel @Inject constructor(
                         val key = annotation.key
                         if (key != null) {
 //                        if (changes.contains("rotation") || freeTextAnnotation.rotation != 0) {
-                            onAnnotationChangedDebouncerFlow.tryEmit(
-                                Triple(
-                                    Random.nextInt(),
-                                    adjustedAnnotations,
-                                    annotation
+
+                            if (ignoreDebouncer) {
+                                change(annotation = annotation, adjustedAnnotations)
+                            } else {
+                                onAnnotationChangedDebouncerFlow.tryEmit(
+                                    Triple(
+                                        Random.nextInt(),
+                                        adjustedAnnotations,
+                                        annotation
+                                    )
                                 )
-                            )
+                            }
 //                        } else {
 //                            val k = onAnnotationChangedDebouncerFlow.value
 //                            if (k != null) {
@@ -1057,18 +1147,17 @@ class PdfReaderViewModel @Inject constructor(
                         }
                     }
                     else -> {
-                        val listOfChanges = mutableListOf(
-                            PdfAnnotationChanges.boundingBox,
-                            PdfAnnotationChanges.paths
-                        )
-                        if (annotation is UnderlineAnnotation) {
-                            listOfChanges.add(PdfAnnotationChanges.color)
-                        }
+                        val listOfChanges =
+                            PdfAnnotationChanges.stringValues(
+                                listOf(
+                                    PdfAnnotationChanges.boundingBox,
+                                    PdfAnnotationChanges.paths
+                                )
+                            ).toMutableList()
+                        listOfChanges.addAll(changes)
                         change(
                             annotation = annotation,
-                            changes = PdfAnnotationChanges.stringValues(
-                                listOfChanges
-                            )
+                            changes = listOfChanges
                         )
                     }
                 }
@@ -1525,10 +1614,12 @@ class PdfReaderViewModel @Inject constructor(
     private fun updateAnnotationsList(forceNotShowAnnotationPopup: Boolean = false) {
         hidePspdfkitToolbars()
         var showAnnotationPopup = !forceNotShowAnnotationPopup && !viewState.showSideBar && selectedAnnotation != null
-        if (selectedAnnotation?.type == org.zotero.android.database.objects.AnnotationType.text) {
+        if (selectedAnnotation?.type == org.zotero.android.database.objects.AnnotationType.text && !isLongPressOnTextAnnotation) {
             showAnnotationPopup = false
         }
+        isLongPressOnTextAnnotation = false
         if (showAnnotationPopup) {
+            annotationEditSelectedKey = selectedAnnotation?.key
             ScreenArguments.pdfAnnotationArgs = PdfAnnotationArgs(
                 selectedAnnotation = selectedAnnotation,
                 userId = viewState.userId,
@@ -1568,7 +1659,8 @@ class PdfReaderViewModel @Inject constructor(
                 select(annotation = annotation, pageIndex = pageIndex, document = this.document)
             }
         } else {
-            select(annotation = null, pageIndex = pdfUiFragment.pageIndex, document = this.document)
+            //no need to provide pageIndex during a deselection.
+            select(annotation = null, pageIndex = null, document = this.document)
         }
     }
 
@@ -1605,13 +1697,13 @@ class PdfReaderViewModel @Inject constructor(
 
     private fun select(
         annotation: org.zotero.android.pdf.data.PDFAnnotation?,
-        pageIndex: Int,
+        pageIndex: Int?,
         document: PdfDocument
     ) {
 
         //TODO updateSelection
 
-        if (annotation != null) {
+        if (annotation != null && pageIndex != null) {
             val pdfAnnotation = document.annotation(pageIndex, annotation.key)
             if (pdfAnnotation != null) {
                 if (!pdfFragment.selectedAnnotations.contains(pdfAnnotation)) {
@@ -1670,7 +1762,9 @@ class PdfReaderViewModel @Inject constructor(
         if (color != null && color.first != annotation.color) {
             changes.add(PdfAnnotationChanges.color)
         }
+        var ignoreDebouncer = true
         if (contents != null && contents != annotation.comment) {
+            ignoreDebouncer = false
             changes.add(PdfAnnotationChanges.contents)
         }
 
@@ -1693,6 +1787,9 @@ class PdfReaderViewModel @Inject constructor(
             if (blendMode != null) {
                 pdfAnnotation.blendMode = blendMode
             }
+            if (annotation.type == org.zotero.android.database.objects.AnnotationType.text) {
+                pdfFragment.notifyAnnotationHasChanged(pdfAnnotation)
+            }
         }
 
         if (changes.contains(PdfAnnotationChanges.contents) && contents != null) {
@@ -1707,9 +1804,10 @@ class PdfReaderViewModel @Inject constructor(
         }
 
         processAnnotationObserving(
-            pdfAnnotation,
-            PdfAnnotationChanges.stringValues(changes),
-            PdfReaderNotification.PSPDFAnnotationChanged
+            annotation = pdfAnnotation,
+            changes = PdfAnnotationChanges.stringValues(changes),
+            pdfReaderNotification = PdfReaderNotification.PSPDFAnnotationChanged,
+            ignoreDebouncer = ignoreDebouncer,
         )
     }
 
@@ -1853,6 +1951,16 @@ class PdfReaderViewModel @Inject constructor(
     }
 
     private fun deselectSelectedAnnotation(annotation: Annotation) {
+        if (annotation.type == AnnotationType.FREETEXT) {
+            val contents = annotation.contents
+            if (contents.isNullOrBlank()) {
+                this.document.annotationProvider.removeAnnotationFromPage(annotation)
+            }
+        }
+        updateState {
+            copy(selectedAnnotationKey = null)
+        }
+
 //        if (viewState.selectedAnnotationKey?.key == annotation.key ) {
 //            _select(key = null, didSelectInDocument = false)
 //        }
@@ -1860,7 +1968,12 @@ class PdfReaderViewModel @Inject constructor(
 
     val selectedAnnotation: org.zotero.android.pdf.data.PDFAnnotation?
         get() {
-            return viewState.selectedAnnotationKey?.let { annotation(it) }
+            val selectedAnnotationKey = viewState.selectedAnnotationKey
+            val let = selectedAnnotationKey?.let {
+                val annotation = annotation(it)
+                annotation
+            }
+            return let
         }
 
     override fun onCleared() {
@@ -1949,7 +2062,8 @@ class PdfReaderViewModel @Inject constructor(
             .disableDefaultToolbar()
             .hideDocumentTitleOverlay()
             .enableStylusOnDetection(true)
-            .hideUserInterfaceWhenCreatingAnnotations(true)
+            .hideUserInterfaceWhenCreatingAnnotations(false)
+            .setUserInterfaceViewMode(UserInterfaceViewMode.USER_INTERFACE_VIEW_MODE_MANUAL)
             .build()
     }
 
@@ -2143,8 +2257,16 @@ class PdfReaderViewModel @Inject constructor(
     }
 
     fun toggleSideBar() {
+        val newShowSideBarState = !viewState.showSideBar
         updateState {
-            copy(showSideBar = !showSideBar)
+            copy(showSideBar = newShowSideBarState)
+        }
+        val selectedAnnotationKey = viewState.selectedAnnotationKey
+        if (newShowSideBarState && selectedAnnotationKey != null) {
+            val index = viewState.sortedKeys.indexOf(selectedAnnotationKey)
+            triggerEffect(
+                PdfReaderViewEffect.ScrollSideBar(index)
+            )
         }
     }
 
@@ -2227,6 +2349,7 @@ class PdfReaderViewModel @Inject constructor(
                 addDocumentListener2()
                 addOnAnnotationCreationModeChangeListener()
                 setOnPreparePopupToolbarListener()
+                addDocumentScrollListener()
 //                updateVisibilityOfAnnotations()
 
             }
@@ -2265,6 +2388,7 @@ class PdfReaderViewModel @Inject constructor(
                 pagePosition: PointF?,
                 clickedAnnotation: Annotation?
             ): Boolean {
+                decideTopBarAndBottomBarVisibility(clickedAnnotation)
                 return false
             }
         })
@@ -2289,7 +2413,7 @@ class PdfReaderViewModel @Inject constructor(
         })
     }
 
-    private fun toggleTopAndBottomBarVisibility(isVisible: Boolean) {
+    private fun setTopBarVisibility(isVisible: Boolean) {
         updateState {
             copy(isTopBarVisible = isVisible)
         }
@@ -2589,16 +2713,7 @@ class PdfReaderViewModel @Inject constructor(
             schemaController = this.schemaController,
             boundingBoxConverter = this.annotationBoundingBoxConverter
         )
-        viewModelScope.launch {
-            perform(
-                dbWrapper = dbWrapperMain,
-                request = request
-            ).ifFailure {
-                Timber.e(it, "PDFReaderViewModel: can't add annotations")
-                return@launch
-            }
-        }
-
+        dbWrapperMain.realmDbStorage.perform(request)
     }
 
     private fun tool(annotation: Annotation): AnnotationTool? {
@@ -2877,7 +2992,7 @@ class PdfReaderViewModel @Inject constructor(
         val annotation =
             annotation(key)
                 ?: return
-        selectAnnotationFromDocument(key)
+        selectAnnotationFromDocument(key = key)
 
         updateState {
             copy(
@@ -2892,9 +3007,11 @@ class PdfReaderViewModel @Inject constructor(
 //            return
 //        }
         val annotationKey = AnnotationKey(key = annotation.key, type = Kind.database)
-        selectAnnotationFromDocument(annotationKey)
+        selectAnnotationFromDocument(key = annotationKey)
 
         val selected = annotation.tags.map { it.name }.toSet()
+
+        this.annotationEditSelectedKey = annotation.key
 
         ScreenArguments.tagPickerArgs = TagPickerArgs(
             libraryId = viewState.library.identifier,
@@ -2970,15 +3087,7 @@ class PdfReaderViewModel @Inject constructor(
             dateParser = this.dateParser
         )
 
-        viewModelScope.launch {
-            perform(
-                dbWrapper = dbWrapperMain,
-                request = request
-            ).ifFailure {
-                Timber.e(it, "PDFReaderViewModel:  can't update annotation $key")
-                return@launch
-            }
-        }
+        dbWrapperMain.realmDbStorage.perform(request)
     }
 
     private fun submitPendingPage(page: Int) {
@@ -3207,6 +3316,20 @@ class PdfReaderViewModel @Inject constructor(
             )
         }
     }
+
+    fun restartDisableForceScreenOnTimer() {
+        viewModelScope.launch {
+            triggerEffect(PdfReaderViewEffect.EnableForceScreenOn)
+        }
+        disableForceScreenOnTimer?.cancel()
+        disableForceScreenOnTimer = Timer()
+        disableForceScreenOnTimer?.schedule(timerTask {
+            viewModelScope.launch {
+                triggerEffect(PdfReaderViewEffect.DisableForceScreenOn)
+            }
+        }, 25 * 60 * 1000L)
+    }
+
 }
 
 data class PdfReaderViewState(
@@ -3266,12 +3389,15 @@ data class PdfReaderViewState(
 
 sealed class PdfReaderViewEffect : ViewEffect {
     object NavigateBack : PdfReaderViewEffect()
+    object DisableForceScreenOn : PdfReaderViewEffect()
+    object EnableForceScreenOn : PdfReaderViewEffect()
     object ShowPdfFilters : PdfReaderViewEffect()
     object ShowPdfSettings : PdfReaderViewEffect()
     object ShowPdfPlainReader: PdfReaderViewEffect()
     object ShowPdfAnnotationMore: PdfReaderViewEffect()
     object ShowPdfColorPicker: PdfReaderViewEffect()
     data class ShowPdfAnnotationAndUpdateAnnotationsList(val scrollToIndex: Int, val showAnnotationPopup: Boolean): PdfReaderViewEffect()
+    data class ScrollSideBar(val scrollToIndex: Int): PdfReaderViewEffect()
     object ScreenRefresh: PdfReaderViewEffect()
     object ClearFocus: PdfReaderViewEffect()
     object NavigateToTagPickerScreen: PdfReaderViewEffect()

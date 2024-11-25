@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 import org.zotero.android.database.objects.Attachment
 import org.zotero.android.database.objects.RItem
 import org.zotero.android.screens.itemdetails.data.ItemDetailCreator
+import org.zotero.android.sync.CollectionIdentifier
 import org.zotero.android.sync.Note
 import org.zotero.android.sync.Tag
 import org.zotero.android.uicomponents.Drawables
@@ -102,6 +103,29 @@ sealed class LongPressOptionItem(
             titleId = Strings.delete,
             textAndIconColor = CustomPalette.ErrorRed,
             resIcon = Drawables.delete_24px
+        )
+
+    object CollectionEmptyTrash :
+        LongPressOptionItem(
+            titleId = Strings.collection_empty_trash,
+            textAndIconColor = CustomPalette.ErrorRed,
+            resIcon = Drawables.delete_24px
+        )
+
+    data class CollectionDownloadAttachments(
+        val collectionId: CollectionIdentifier,
+    ) :
+        LongPressOptionItem(
+            titleId = Strings.collections_download_attachments,
+            resIcon = Drawables.baseline_download_24
+        )
+
+    data class CollectionRemoveDownloads(
+        val collectionId: CollectionIdentifier,
+    ) :
+        LongPressOptionItem(
+            titleId = Strings.collection_remove_downloads,
+            resIcon = Drawables.remove_downloads_24
         )
 
     data class CollectionEdit(val collection: org.zotero.android.sync.Collection) :
