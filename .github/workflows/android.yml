@@ -27,7 +27,7 @@ jobs:
       - name: Merge Changes from Upstream
         run: |
           git merge --no-edit --allow-unrelated-histories -X theirs upstream/master
-          git reset .github/workflows/  # Make sure no workflow files are staged
+          git reset .github/
           
       # Push merged changes to fork
       - name: Push Changes to Fork
