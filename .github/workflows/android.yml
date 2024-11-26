@@ -76,7 +76,7 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          tag: {{ steps.date.outputs.date }}
+          tag: ${{ steps.date.outputs.date }}
           name: nightly-release-${{ steps.date.outputs.date }}
           body: Built automatically from https://github.com/zotero/zotero-android
           artifacts: app/build/outputs/apk/debug/app-debug.apk
