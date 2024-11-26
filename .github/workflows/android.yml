@@ -79,9 +79,10 @@ jobs:
       - name: ls
         run: echo $(find "." -type f -name "*.apk")
         
-      # - name: Create Release
-      #   uses: ncipollo/release-action@v1
-      #   with:
-      #     tag: nightly-tag-${{ env.NOW }}
-      #     name: nightly-release-${{ env.NOW }}
-      #     body: Built automatically from https://github.com/zotero/zotero-android
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-tag-${{ env.NOW }}
+          name: nightly-release-${{ env.NOW }}
+          body: Built automatically from https://github.com/zotero/zotero-android
+          artifacts: ./app/build/outputs/apk/dev/debug/app-dev-debug.apk
