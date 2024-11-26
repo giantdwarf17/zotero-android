@@ -77,7 +77,7 @@ jobs:
         run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       - name: ls
-        run: echo $(find "$directory" -type f -name "*.apk")
+        run: echo $(find "." -type f -name "*.apk")
         
       # - name: Create Release
       #   uses: ncipollo/release-action@v1
