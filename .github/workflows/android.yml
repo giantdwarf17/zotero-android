@@ -72,11 +72,17 @@ jobs:
       # Skip downloading dependencies from remote repositories to avoid authentication
       - name: Build the app without remote credentials
         run: ./gradlew assembleDebug --no-configuration-cache -PpreDexLibs=false --stacktrace
+        
+      - name: Set current date as env variable
+        run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
+      - name: ls
+        run: ls app/build/outputs/apk/debug
+        
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          tag: v${{ steps.date.outputs.date }}
-          name: nightly-release-${{ steps.date.outputs.date }}
+          tag: nightly-tag-${{ env.NOW }}
+          name: nightly-release-${{ env.NOW }}
           body: Built automatically from https://github.com/zotero/zotero-android
           artifacts: app/build/outputs/apk/debug/app-debug.apk
