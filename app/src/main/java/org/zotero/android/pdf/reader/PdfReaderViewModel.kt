@@ -484,6 +484,11 @@ class PdfReaderViewModel @Inject constructor(
                 this@PdfReaderViewModel.onDocumentLoaded(document)
             }
 
+            override fun onDocumentClick(): Boolean {
+                decideTopBarAndBottomBarVisibility(null)
+                return false
+            }
+
             override fun onPageClick(
                 document: PdfDocument,
                 pageIndex: Int,
@@ -2061,9 +2066,9 @@ class PdfReaderViewModel @Inject constructor(
 //            .setSelectedAnnotationResizeEnabled(false)
             .autosaveEnabled(false)
             .scrollbarsEnabled(true)
-            .defaultToolbarEnabled(false)
-            .documentTitleOverlayEnabled(false)
-            .stylusOnDetectionEnabled(true)
+            .disableDefaultToolbar()
+            .hideDocumentTitleOverlay()
+            .enableStylusOnDetection(true)
             .hideUserInterfaceWhenCreatingAnnotations(false)
             .setUserInterfaceViewMode(UserInterfaceViewMode.USER_INTERFACE_VIEW_MODE_MANUAL)
             .build()
@@ -2382,6 +2387,11 @@ class PdfReaderViewModel @Inject constructor(
                     queuedUpPdfReaderColorPickerResult = null
 
                 }
+            }
+
+            override fun onDocumentClick(): Boolean {
+                decideTopBarAndBottomBarVisibility(null)
+                return false
             }
 
             override fun onPageClick(
